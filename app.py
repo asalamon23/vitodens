@@ -1,51 +1,3 @@
-import os, secrets, hashlib, base64, time
-from datetime import datetime
-from urllib.parse import urlencode
-from flask import Flask, render_template, request, redirect, session, jsonify
-import requests
-import scheduler
-
-app=Flask(__name__, template_folder=os.path.join(getattr(__import__('sys'), '_MEIPASS', os.path.dirname(__file__)), 'templates'))
-app.secret_key=os.environ.get('FLASK_SECRET_KEY') or secrets.token_hex(32)
-CLIENT_ID=os.environ.get('VIESSMANN_CLIENT_ID','').strip()
-BASE='https://api.viessmann.com'
-AUTH='https://iam.viessmann.com/idp/v2'
-REDIRECT=os.environ.get('REDIRECT_URI','http://localhost:5000/callback')
-# Single-user local application: token held in process memory, never exposed to browser.
-TOKENS={}
-# Tokens are held in memory; scheduled writes require this process to remain running.
-# OAuth refresh tokens are not persisted; re-login is required after restart.
-
-def verifier(): return base64.urlsafe_b64encode(secrets.token_bytes(40)).decode().rstrip('=')
-def challenge(v): return base64.urlsafe_b64encode(hashlib.sha256(v.encode()).digest()).decode().rstrip('=')
-def uid():
-    if 'uid' not in session: session['uid']=secrets.token_urlsafe(20)
-    return session['uid']
-def token_for(owner):
-    t=TOKENS.get(owner)
-    if not t: raise ValueError('Not connected. Sign in first.')
-    if t.get('expires_at',0)<time.time()+90:
-        r=requests.post(AUTH+'/token',data={'grant_type':'refresh_token','client_id':CLIENT_ID,'refresh_token':t['refresh_token']},timeout=20)
-        r.raise_for_status(); fresh=r.json(); fresh['refresh_token']=fresh.get('refresh_token',t['refresh_token']);fresh['expires_at']=time.time()+fresh.get('expires_in',3600); TOKENS[owner]=fresh;t=fresh
-    return t['access_token']
-def token():return token_for(uid())
-
-def api(path,method='GET',body=None):
-    if not path.startswith('/iot/'): raise ValueError('Unsupported API path')
-    r=requests.request(method,BASE+path,headers={'Authorization':'Bearer '+token(),'Accept':'application/json'},json=body,timeout=25)
-    if not r.ok: raise ValueError('Viessmann API error '+str(r.status_code)+': '+r.text[:250])
-    return r.json() if r.content else {}
-
-def discover():
-    installs=api('/iot/v2/equipment/installations?includeGateways=true').get('data',[])
-    for inst in installs:
-        for gateway in inst.get('gateways',[]):
-            installation=str(inst['id']);serial=str(gateway['serial'])
-            devices=api(f'/iot/v2/equipment/installations/{installation}/gateways/{serial}/devices').get('data',[])
-            if devices:
-                d=devices[0];return installation,serial,str(d['id'])
-    raise ValueError('No connected Viessmann device found for this account.')
-
 def feature_path(i,g,d): return f'/iot/v2/features/installations/{i}/gateways/{g}/devices/{d}/features'
 def get_features():
     i,g,d=discover()
@@ -57,19 +9,15 @@ def execute_scheduled(owner,feature,cmd,params):
     def get(path):
         r=requests.get(BASE+path,headers={'Authorization':'Bearer '+access},timeout=25)
         r.raise_for_status();return r.json()
-    installs=get('/iot/v2/equipment/installations?includeGateways=true').get('data',[])
-    for inst in installs:
-        for gate in inst.get('gateways',[]):
-            i=str(inst['id']);g=str(gate['serial'])
-            devices=get(f'/iot/v2/equipment/installations/{i}/gateways/{g}/devices').get('data',[])
-            if not devices:continue
-            d=str(devices[0]['id']);base=feature_path(i,g,d)
-            fs=get(base).get('data',[])
-            f=next((x for x in fs if x.get('feature')==feature),None)
-            if not f or not f.get('commands',{}).get(cmd,{}).get('isExecutable'):raise ValueError('Feature not executable')
-            r=requests.post(BASE+base+'/'+feature+'/commands/'+cmd,headers={'Authorization':'Bearer '+access},json=params,timeout=25)
-            r.raise_for_status();return
-    raise ValueError('Device not found')
+    i,g,d=discover_with(get)
+    base=feature_path(i,g,d)
+    fs=get(base).get('data',[])
+    f=next((x for x in fs if x.get('feature')==feature),None)
+    if not f or not f.get('commands',{}).get(cmd,{}).get('isExecutable'):
+        raise ValueError('Feature not executable')
+    r=requests.post(BASE+base+'/'+feature+'/commands/'+cmd,
+                    headers={'Authorization':'Bearer '+access},json=params,timeout=25)
+    r.raise_for_status()
 
 @app.route('/api/plans',methods=['GET','POST','DELETE'])
 def plan_route():
@@ -127,7 +75,11 @@ def login():
     return redirect(AUTH+'/authorize?'+urlencode(params))
 @app.route('/callback')
 def callback():
-    if not request.args.get('state') or request.args.get('state')!=session.pop('oauth_state',None):return 'Invalid OAuth state',400
+    received_state=request.args.get('state')
+    expected_state=session.pop('oauth_state',None)
+    if not received_state or not expected_state or not secrets.compare_digest(received_state,expected_state):
+        app.logger.warning('OAuth state verification failed: session_state_present=%s callback_state_present=%s host=%s (values redacted)',bool(expected_state),bool(received_state),request.host)
+        return 'Invalid OAuth state. Start at http://localhost:5000 and click Connect again; do not use 127.0.0.1.',400
     code=request.args.get('code');v=session.pop('pkce',None)
     if not code or not v:return 'Missing authorization code',400
     r=requests.post(AUTH+'/token',data={'grant_type':'authorization_code','client_id':CLIENT_ID,'redirect_uri':REDIRECT,'code':code,'code_verifier':v},timeout=20)
