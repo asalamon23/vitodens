@@ -7,8 +7,10 @@ import scheduler
 app=Flask(__name__, template_folder=os.path.join(getattr(__import__('sys'), '_MEIPASS', os.path.dirname(__file__)), 'templates'))
 app.secret_key=os.environ.get('FLASK_SECRET_KEY') or secrets.token_hex(32)
 CLIENT_ID=os.environ.get('VIESSMANN_CLIENT_ID','').strip()
-BASE='https://api.viessmann.com'
-AUTH='https://iam.viessmann.com/idp/v2'
+
+BASE='https://api.viessmann-climatesolutions.com'
+AUTH='https://iam.viessmann-climatesolutions.com/idp/v3'
+
 REDIRECT=os.environ.get('REDIRECT_URI','http://localhost:5000/callback')
 # Single-user local application: token held in process memory, never exposed to browser.
 TOKENS={}
