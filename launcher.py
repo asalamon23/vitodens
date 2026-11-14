@@ -12,7 +12,7 @@ from app import app, scheduler, execute_scheduled
 
 def open_dashboard():
     time.sleep(2)
-    webbrowser.open('http://127.0.0.1:5000')
+    webbrowser.open('http://localhost:5000')
 
 if __name__ == '__main__':
     if not os.environ.get('VIESSMANN_CLIENT_ID'):
