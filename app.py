@@ -1,4 +1,5 @@
 import os, secrets, hashlib, base64, time
+from datetime import datetime
 from urllib.parse import urlencode
 from flask import Flask, render_template, request, redirect, session, jsonify
 import requests
@@ -7,10 +8,8 @@ import scheduler
 app=Flask(__name__, template_folder=os.path.join(getattr(__import__('sys'), '_MEIPASS', os.path.dirname(__file__)), 'templates'))
 app.secret_key=os.environ.get('FLASK_SECRET_KEY') or secrets.token_hex(32)
 CLIENT_ID=os.environ.get('VIESSMANN_CLIENT_ID','').strip()
-
-BASE='https://api.viessmann-climatesolutions.com'
-AUTH='https://iam.viessmann-climatesolutions.com/idp/v3'
-
+BASE='https://api.viessmann.com'
+AUTH='https://iam.viessmann.com/idp/v2'
 REDIRECT=os.environ.get('REDIRECT_URI','http://localhost:5000/callback')
 # Single-user local application: token held in process memory, never exposed to browser.
 TOKENS={}
@@ -38,11 +37,11 @@ def api(path,method='GET',body=None):
     return r.json() if r.content else {}
 
 def discover():
-    installs=api('/iot/v1/equipment/installations?includeGateways=true').get('data',[])
+    installs=api('/iot/v2/equipment/installations?includeGateways=true').get('data',[])
     for inst in installs:
         for gateway in inst.get('gateways',[]):
             installation=str(inst['id']);serial=str(gateway['serial'])
-            devices=api(f'/iot/v1/equipment/installations/{installation}/gateways/{serial}/devices').get('data',[])
+            devices=api(f'/iot/v2/equipment/installations/{installation}/gateways/{serial}/devices').get('data',[])
             if devices:
                 d=devices[0];return installation,serial,str(d['id'])
     raise ValueError('No connected Viessmann device found for this account.')
@@ -58,11 +57,11 @@ def execute_scheduled(owner,feature,cmd,params):
     def get(path):
         r=requests.get(BASE+path,headers={'Authorization':'Bearer '+access},timeout=25)
         r.raise_for_status();return r.json()
-    installs=get('/iot/v1/equipment/installations?includeGateways=true').get('data',[])
+    installs=get('/iot/v2/equipment/installations?includeGateways=true').get('data',[])
     for inst in installs:
         for gate in inst.get('gateways',[]):
             i=str(inst['id']);g=str(gate['serial'])
-            devices=get(f'/iot/v1/equipment/installations/{i}/gateways/{g}/devices').get('data',[])
+            devices=get(f'/iot/v2/equipment/installations/{i}/gateways/{g}/devices').get('data',[])
             if not devices:continue
             d=str(devices[0]['id']);base=feature_path(i,g,d)
             fs=get(base).get('data',[])
